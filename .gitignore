@@ -1,0 +1,41 @@
+# --- OS Specific ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.settings/
+.classpath
+
+# --- Golang API ---
+GolangAPI/.env
+GolangAPI/tmp/
+GolangAPI/main
+GolangAPI/*.exe
+GolangAPI/*.test
+GolangAPI/*.out
+
+# --- NextJSwGO (Frontend) ---
+NextJSwGO/node_modules/
+NextJSwGO/.next/
+NextJSwGO/out/
+NextJSwGO/.env.local
+NextJSwGO/.env.development.local
+NextJSwGO/.env.test.local
+NextJSwGO/.env.production.local
+NextJSwGO/npm-debug.log*
+NextJSwGO/yarn-debug.log*
+NextJSwGO/yarn-error.log*
+
+# --- Docker & Compose ---
+.docker/
+docker-compose.override.yml
