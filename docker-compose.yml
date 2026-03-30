@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: go_db
+      MYSQL_USER: go_user
+      MYSQL_PASSWORD: go_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app-network
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    container_name: redis_cache
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  go-api:
+    image: golang:1.26.1-alpine
+    container_name: go_backend
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_USER=go_user
+      - DB_PASSWORD=go_password
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=go_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=super-secret-key-change-me
+      - PORT=8080
+    working_dir: /app
+    volumes:
+      - ./GolangAPI:/app
+      - go_modules:/go/pkg/mod
+    command: sh -c "go install github.com/air-verse/air@v1.64.5 && go mod tidy && air --build.cmd 'go build -o tmp/main ./cmd/api/main.go' --build.bin './tmp/main'"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  nextjs-frontend:
+    image: node:20.20.1-alpine
+    container_name: nextjs_ui
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080/api # Configured for client-side fetches from host browser
+    working_dir: /app
+    volumes:
+      - ./NextJSwGO:/app
+    command: sh -c "npm install && npm run dev"
+    depends_on:
+      - go-api
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  go_modules:
