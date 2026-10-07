@@ -1,59 +1,74 @@
 package middlewares
 
 import (
-	"fmt"
+	"context"
 	"net/http"
-	"os"
 	"strings"
 
+	"github.com/chayanonchanatapa/golangapi/internal/auth"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 )
 
-func AuthMiddleware() gin.HandlerFunc {
+// RevocationChecker reports whether an access token was revoked (e.g. by logout).
+type RevocationChecker interface {
+	IsAccessTokenRevoked(ctx context.Context, jti string) (bool, error)
+}
+
+func AuthMiddleware(revocations RevocationChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
-			c.Abort()
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format must be Bearer {token}"})
-			c.Abort()
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format must be Bearer {token}"})
 			return
 		}
 
-		tokenString := parts[1]
-		secret := os.Getenv("JWT_SECRET")
-		if secret == "" {
-			secret = "super-secret-key-change-me"
+		claims, err := auth.Parse(parts[1])
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
 		}
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		// Refresh tokens carry type=refresh and must not be usable as access tokens
+		if claims["type"] == "refresh" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
+		}
+
+		if jti, _ := claims["jti"].(string); jti != "" && revocations != nil {
+			revoked, err := revocations.IsAccessTokenRevoked(c.Request.Context(), jti)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "Unable to verify session"})
+				return
 			}
-			return []byte(secret), nil
-		})
-
-		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
-			c.Abort()
-			return
+			if revoked {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Session has been logged out"})
+				return
+			}
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
-			c.Abort()
-			return
-		}
+		// JSON numbers decode as float64
+		permissionID, _ := claims["permission_id"].(float64)
 
-		// Store user id in context
 		c.Set("userID", claims["user_id"])
+		c.Set("permissionID", uint(permissionID))
+		c.Next()
+	}
+}
+
+// RequirePermission must run after AuthMiddleware. It mirrors the frontend's
+// useRequireAuth(min) check so the API is protected even if the UI is bypassed.
+func RequirePermission(min uint) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetUint("permissionID") < min {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "คุณไม่มีสิทธิ์เข้าถึงส่วนนี้"})
+			return
+		}
 		c.Next()
 	}
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/chayanonchanatapa/golangapi/internal/auth"
 	"github.com/chayanonchanatapa/golangapi/internal/models"
 	"github.com/chayanonchanatapa/golangapi/internal/repositories"
 	"github.com/golang-jwt/jwt/v5"
@@ -15,11 +17,12 @@ import (
 )
 
 type AuthService struct {
-	userRepo *repositories.UserRepository
+	userRepo  *repositories.UserRepository
+	tokenRepo *repositories.TokenRepository
 }
 
-func NewAuthService(userRepo *repositories.UserRepository) *AuthService {
-	return &AuthService{userRepo: userRepo}
+func NewAuthService(userRepo *repositories.UserRepository, tokenRepo *repositories.TokenRepository) *AuthService {
+	return &AuthService{userRepo: userRepo, tokenRepo: tokenRepo}
 }
 
 func (s *AuthService) Register(email, password, prefix, firstName, lastName, gender string) (*models.User, error) {
@@ -136,7 +139,7 @@ func (s *AuthService) FacebookLogin(code, redirectURI string) (string, string, e
 
 		user = &models.User{
 			Email:        email,
-			Password:     "", 
+			Password:     "",
 			FirstName:    fbUser.FirstName,
 			LastName:     fbUser.LastName,
 			Gender:       pGender,
@@ -158,7 +161,16 @@ func (s *AuthService) FacebookLogin(code, redirectURI string) (string, string, e
 		return "", "", errors.New("บัญชีนี้ถูกระงับการใช้งาน")
 	}
 
-	return generateTokens(user)
+	accessTokenString, refreshTokenString, err := s.generateTokens(user)
+	if err != nil {
+		return "", "", err
+	}
+
+	now := time.Now()
+	user.LastLoginAt = &now
+	_ = s.userRepo.UpdateUser(user) // Ignore error on non-critical update
+
+	return accessTokenString, refreshTokenString, nil
 }
 
 func (s *AuthService) Login(email, password string) (string, string, error) {
@@ -178,7 +190,7 @@ func (s *AuthService) Login(email, password string) (string, string, error) {
 	}
 
 	// Generate JWT
-	accessTokenString, refreshTokenString, err := generateTokens(user)
+	accessTokenString, refreshTokenString, err := s.generateTokens(user)
 	if err != nil {
 		return "", "", err
 	}
@@ -192,36 +204,29 @@ func (s *AuthService) Login(email, password string) (string, string, error) {
 }
 
 func (s *AuthService) RefreshToken(refreshTokenStr string) (string, string, error) {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "super-secret-key-change-me"
-	}
-
-	token, err := jwt.Parse(refreshTokenStr, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
-		}
-		return []byte(secret), nil
-	})
-
-	if err != nil || !token.Valid {
+	claims, err := auth.Parse(refreshTokenStr)
+	if err != nil {
 		return "", "", errors.New("invalid refresh token")
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", "", errors.New("invalid claims")
 	}
 
 	if claims["type"] != "refresh" {
 		return "", "", errors.New("not a refresh token")
 	}
 
-	userIDFloat, ok := claims["user_id"].(float64)
-	if !ok {
-		return "", "", errors.New("invalid user_id in token")
+	jti, _ := claims["jti"].(string)
+	if jti == "" {
+		return "", "", errors.New("invalid refresh token")
 	}
-	userID := uint(userIDFloat)
+
+	// Refresh tokens are single-use: consuming it here means a stolen or
+	// replayed token stops working as soon as either party refreshes once.
+	userID, found, err := s.tokenRepo.ConsumeRefreshToken(context.Background(), jti)
+	if err != nil {
+		return "", "", err
+	}
+	if !found {
+		return "", "", errors.New("refresh token already used or revoked")
+	}
 
 	user, err := s.userRepo.GetUserByID(userID)
 	if err != nil {
@@ -232,46 +237,82 @@ func (s *AuthService) RefreshToken(refreshTokenStr string) (string, string, erro
 		return "", "", errors.New("บัญชีนี้ถูกระงับการใช้งาน")
 	}
 
-	return generateTokens(user)
+	return s.generateTokens(user)
 }
 
-func generateTokens(user *models.User) (string, string, error) {
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "super-secret-key-change-me" // fallback
+// Logout revokes whichever of the two tokens are valid. Invalid or expired
+// tokens are ignored so logging out never fails from the client's view.
+func (s *AuthService) Logout(accessTokenStr, refreshTokenStr string) error {
+	ctx := context.Background()
+
+	if accessTokenStr != "" {
+		if claims, err := auth.Parse(accessTokenStr); err == nil {
+			if jti, _ := claims["jti"].(string); jti != "" {
+				if err := s.tokenRepo.RevokeAccessToken(ctx, jti, auth.RemainingTTL(claims)); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
-	accessTokenExp := time.Now().Add(time.Minute * 60) // Expire in 60 mins
+	if refreshTokenStr != "" {
+		if claims, err := auth.Parse(refreshTokenStr); err == nil && claims["type"] == "refresh" {
+			if jti, _ := claims["jti"].(string); jti != "" {
+				if err := s.tokenRepo.DeleteRefreshToken(ctx, jti); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *AuthService) generateTokens(user *models.User) (string, string, error) {
+	now := time.Now()
+
+	accessJTI, err := auth.NewJTI()
+	if err != nil {
+		return "", "", err
+	}
 
 	claims := jwt.MapClaims{
+		"jti":           accessJTI,
 		"user_id":       user.ID,
 		"permission_id": user.PermissionID,
 		"email":         user.Email,
 		"first_name":    user.FirstName,
 		"last_name":     user.LastName,
-		"iat":           time.Now().Unix(),
-		"exp":           accessTokenExp.Unix(),
+		"iat":           now.Unix(),
+		"exp":           now.Add(auth.AccessTokenTTL).Unix(),
 	}
 
 	if user.Prefix != nil {
 		claims["prefix"] = *user.Prefix
 	}
 
-	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	accessTokenString, err := accessToken.SignedString([]byte(secret))
+	accessTokenString, err := auth.Sign(claims)
 	if err != nil {
 		return "", "", err
 	}
 
 	// Refresh Token
+	refreshJTI, err := auth.NewJTI()
+	if err != nil {
+		return "", "", err
+	}
 	rfClaims := jwt.MapClaims{
+		"jti":     refreshJTI,
 		"user_id": user.ID,
 		"type":    "refresh",
-		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // Expire in 7 days
+		"exp":     now.Add(auth.RefreshTokenTTL).Unix(),
 	}
-	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, rfClaims)
-	refreshTokenString, err := refreshToken.SignedString([]byte(secret))
+	refreshTokenString, err := auth.Sign(rfClaims)
 	if err != nil {
+		return "", "", err
+	}
+
+	if err := s.tokenRepo.SaveRefreshToken(context.Background(), refreshJTI, user.ID, auth.RefreshTokenTTL); err != nil {
 		return "", "", err
 	}
 

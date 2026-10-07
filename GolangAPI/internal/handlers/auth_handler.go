@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/chayanonchanatapa/golangapi/internal/services"
 	"github.com/gin-gonic/gin"
@@ -142,4 +143,24 @@ func (h *AuthHandler) FacebookLogin(c *gin.Context) {
 		"token":         accessToken,
 		"refresh_token": refreshToken,
 	})
+}
+
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+// Logout is a public route: an expired access token must still be able to
+// log out, so it reads the Authorization header itself instead of using AuthMiddleware.
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req LogoutRequest
+	_ = c.ShouldBindJSON(&req) // body is optional
+
+	accessToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+
+	if err := h.authService.Logout(accessToken, req.RefreshToken); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ออกจากระบบไม่สำเร็จ กรุณาลองใหม่"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }

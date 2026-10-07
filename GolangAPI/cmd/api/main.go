@@ -31,37 +31,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("Could not connect to Redis: %v", err)
 	}
-	_ = redisClient // To avoid unused variable error temporarily
 
 	// Repositories
 	userRepo := repositories.NewUserRepository(db)
 	productRepo := repositories.NewProductRepository(db)
+	tokenRepo := repositories.NewTokenRepository(redisClient)
 
 	// Services
-	authService := services.NewAuthService(userRepo)
+	authService := services.NewAuthService(userRepo, tokenRepo)
 	productService := services.NewProductService(productRepo)
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(authService)
 	productHandler := handlers.NewProductHandler(productService)
+	storeHandler := handlers.NewStoreHandler(productService)
 
 	// Initialize Gin router
 	r := gin.Default()
 
-	// CORS Middleware (simple for development)
-	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	})
+	// CORS: ALLOWED_ORIGINS is a comma-separated list, empty allows any origin
+	r.Use(middlewares.CORS(os.Getenv("ALLOWED_ORIGINS")))
 
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -72,10 +61,11 @@ func main() {
 	// Public Routes
 	api := r.Group("/api")
 	routes.RegisterAuthRoutes(api, authHandler)
+	routes.RegisterStoreRoutes(api, storeHandler)
 
 	// Protected Routes
 	protected := r.Group("/api")
-	protected.Use(middlewares.AuthMiddleware())
+	protected.Use(middlewares.AuthMiddleware(tokenRepo))
 	{
 		protected.GET("/dashboard", func(c *gin.Context) {
 			userID, _ := c.Get("userID")
@@ -85,8 +75,10 @@ func main() {
 			})
 		})
 
-		// Product Routes
-		routes.RegisterProductRoutes(protected, productHandler)
+		// Product Routes (staff only, permission_id >= 2)
+		staff := protected.Group("")
+		staff.Use(middlewares.RequirePermission(2))
+		routes.RegisterProductRoutes(staff, productHandler)
 	}
 
 	port := os.Getenv("PORT")

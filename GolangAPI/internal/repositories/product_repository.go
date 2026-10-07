@@ -19,9 +19,35 @@ type ProductRepository interface {
 	GetOrCreateProductType(name string, subCategoryID uint) (*models.ProductType, error)
 	GetOrCreateColour(name string) (*models.Colour, error)
 	GetOrCreateUsage(name string) (*models.Usage, error)
-	
+
 	// Import
-	UpsertProduct(product *models.Product) error
+	UpsertProduct(product *models.Product, given ImportFields) error
+
+	// Storefront (active products only) and dashboard
+	FindPublic(q StoreQuery) ([]models.Product, int64, error)
+	FindPublicByID(id uint64) (*models.Product, error)
+	References() (*models.References, error)
+	Stats(lowStockThreshold int64) (*models.ProductStats, error)
+}
+
+// ImportFields says which optional columns the import row actually filled in.
+// Columns left empty keep the existing product's value when updating.
+type ImportFields struct {
+	Price       bool
+	CompareAt   bool
+	Stock       bool
+	Description bool
+}
+
+// StoreQuery holds the storefront list filters. Zero values mean "no filter".
+type StoreQuery struct {
+	Page       int
+	PerPage    int
+	Search     string
+	CategoryID uint
+	InStock    bool
+	Sort       string // newest (default) | price_asc | price_desc
+	ExcludeID  uint64
 }
 
 type productRepository struct {
@@ -139,13 +165,159 @@ func (r *productRepository) GetOrCreateUsage(name string) (*models.Usage, error)
 	return &usage, err
 }
 
-func (r *productRepository) UpsertProduct(product *models.Product) error {
+func (r *productRepository) UpsertProduct(product *models.Product, given ImportFields) error {
 	var existing models.Product
 	if err := r.db.Where("external_id = ?", product.ExternalID).First(&existing).Error; err == nil {
-		// Found, update it
-		product.ID = existing.ID // keep same ID
+		// Found, update it. Save() writes every column, so carry over whatever
+		// the import row did not provide instead of zeroing it.
+		product.ID = existing.ID
+		product.CreatedAt = existing.CreatedAt
+		product.Status = existing.Status // re-importing must not re-enable a product someone switched off
+		if !given.Price {
+			product.Price = existing.Price
+		}
+		if !given.CompareAt {
+			product.CompareAt = existing.CompareAt
+		}
+		if !given.Stock {
+			product.Stock = existing.Stock
+		}
+		if !given.Description {
+			product.Description = existing.Description
+		}
 		return r.db.Save(product).Error
 	}
 	// Not found, create it
 	return r.db.Create(product).Error
+}
+
+func (r *productRepository) FindPublic(q StoreQuery) ([]models.Product, int64, error) {
+	var products []models.Product
+	var total int64
+
+	query := r.db.Model(&models.Product{}).Where("status = ?", "active")
+	if q.Search != "" {
+		query = query.Where("title LIKE ?", "%"+q.Search+"%")
+	}
+	if q.CategoryID != 0 {
+		query = query.Where("category_id = ?", q.CategoryID)
+	}
+	if q.InStock {
+		query = query.Where("stock > 0")
+	}
+	if q.ExcludeID != 0 {
+		query = query.Where("id <> ?", q.ExcludeID)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	order := "id desc"
+	switch q.Sort {
+	case "price_asc":
+		order = "price asc, id desc"
+	case "price_desc":
+		order = "price desc, id desc"
+	}
+
+	err := query.Offset((q.Page - 1) * q.PerPage).Limit(q.PerPage).Order(order).
+		Preload("Category").
+		Preload("SubCategory").
+		Preload("ProductType").
+		Preload("Colour").
+		Preload("Usage").
+		Preload("Gender").
+		Find(&products).Error
+	return products, total, err
+}
+
+func (r *productRepository) FindPublicByID(id uint64) (*models.Product, error) {
+	var product models.Product
+	err := r.db.Where("status = ?", "active").
+		Preload("Gender").
+		Preload("Category").
+		Preload("SubCategory").
+		Preload("ProductType").
+		Preload("Colour").
+		Preload("Usage").
+		First(&product, id).Error
+	return &product, err
+}
+
+func (r *productRepository) References() (*models.References, error) {
+	refs := &models.References{}
+
+	err := r.db.Model(&models.Category{}).
+		Select("categories.*, COUNT(products.id) AS product_count").
+		Joins("LEFT JOIN products ON products.category_id = categories.id AND products.status = 'active'").
+		Group("categories.id").
+		Order("categories.id").
+		Scan(&refs.Categories).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, q := range []struct {
+		dest  interface{}
+		order string
+	}{
+		{&refs.Genders, "id"},
+		{&refs.SubCategories, "category_id, name"},
+		{&refs.ProductTypes, "sub_category_id, name"},
+		{&refs.Colours, "name"},
+		{&refs.Usages, "id"},
+	} {
+		if err := r.db.Order(q.order).Find(q.dest).Error; err != nil {
+			return nil, err
+		}
+	}
+	return refs, nil
+}
+
+func (r *productRepository) Stats(lowStockThreshold int64) (*models.ProductStats, error) {
+	// Scan totals into a flat struct: GORM can't scan into ProductStats directly
+	// because of its slice fields.
+	var totals struct {
+		Total          int64
+		Active         int64
+		Inactive       int64
+		LowStock       int64
+		OutOfStock     int64
+		InventoryValue float64
+	}
+	err := r.db.Model(&models.Product{}).Select(`
+		COUNT(*) AS total,
+		COALESCE(SUM(status = 'active'), 0) AS active,
+		COALESCE(SUM(status = 'inactive'), 0) AS inactive,
+		COALESCE(SUM(status = 'active' AND stock > 0 AND stock <= ?), 0) AS low_stock,
+		COALESCE(SUM(status = 'active' AND stock <= 0), 0) AS out_of_stock,
+		COALESCE(SUM(price * stock), 0) AS inventory_value`, lowStockThreshold).
+		Scan(&totals).Error
+	if err != nil {
+		return nil, err
+	}
+
+	stats := &models.ProductStats{
+		Total:          totals.Total,
+		Active:         totals.Active,
+		Inactive:       totals.Inactive,
+		LowStock:       totals.LowStock,
+		OutOfStock:     totals.OutOfStock,
+		InventoryValue: totals.InventoryValue,
+	}
+
+	err = r.db.Model(&models.Category{}).
+		Select("categories.id, categories.name, COUNT(products.id) AS count").
+		Joins("LEFT JOIN products ON products.category_id = categories.id").
+		Group("categories.id").
+		Order("count desc, categories.id").
+		Scan(&stats.ByCategory).Error
+	if err != nil {
+		return nil, err
+	}
+
+	err = r.db.Where("status = 'active' AND stock <= ?", lowStockThreshold).
+		Order("stock asc, id desc").Limit(5).Find(&stats.LowStockItems).Error
+	return stats, err
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/chayanonchanatapa/golangapi/internal/models"
 	"github.com/chayanonchanatapa/golangapi/internal/services"
@@ -44,7 +45,7 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 
 func (h *ProductHandler) GetProduct(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
 		return
@@ -80,7 +81,7 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 
 func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
 		return
@@ -102,7 +103,7 @@ func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 
 func (h *ProductHandler) DeleteProduct(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
 		return
@@ -130,20 +131,46 @@ func (h *ProductHandler) ImportProducts(c *gin.Context) {
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
-	// Optional: we can configure the CSV reader if the file might have weird delimiters
-	// reader.Comma = ','
-	
-	records, err := reader.ReadAll()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid csv format"})
-		return
+	var records [][]string
+	if strings.HasSuffix(strings.ToLower(fileHeader.Filename), ".xlsx") {
+		records, err = readXLSX(file)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid xlsx file"})
+			return
+		}
+	} else {
+		reader := csv.NewReader(file)
+		// Allow ragged rows; the service skips (and counts) rows with too few columns
+		// instead of the whole file failing on one bad line.
+		reader.FieldsPerRecord = -1
+		reader.LazyQuotes = true
+
+		records, err = reader.ReadAll()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid csv format"})
+			return
+		}
 	}
 
-	if err := h.service.ImportProducts(records); err != nil {
+	imported, skipped, err := h.service.ImportProducts(records)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "products imported successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "products imported successfully",
+		"imported": imported,
+		"skipped":  skipped,
+	})
+}
+
+func (h *ProductHandler) GetStats(c *gin.Context) {
+	stats, err := h.service.GetStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": stats})
 }

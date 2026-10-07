@@ -39,3 +39,9 @@ NextJSwGO/yarn-error.log*
 # --- Docker & Compose ---
 .docker/
 docker-compose.override.yml
+
+# --- Archived env files (contain secrets) ---
+*.env.zip
+*.env.local.zip
+.env*.zip
+NextJSwGO/*.tsbuildinfo
