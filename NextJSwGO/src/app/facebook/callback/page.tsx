@@ -2,6 +2,9 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2 } from "lucide-react";
+import { AuthShell } from "@/components/auth/auth-shell";
+import { saveTokens } from "@/lib/session";
 
 function FacebookCallbackContent() {
     const searchParams = useSearchParams();
@@ -30,13 +33,11 @@ function FacebookCallbackContent() {
                 if (!res.ok) throw new Error(data.error || "เข้าสู่ระบบผ่าน Facebook ล้มเหลว");
 
                 // จัดเก็บตั๋วทั้งสองใบ
-                localStorage.setItem("token", data.token);
-                localStorage.setItem("refresh_token", data.refresh_token);
-                
+                saveTokens(data.token, data.refresh_token);
+
                 setStatus("เข้าสู่ระบบสำเร็จ! กำลังพาไปหน้าแรก...");
-                window.dispatchEvent(new Event("storage"));
                 
-                setTimeout(() => router.push("/backend/setting/products"), 1000);
+                setTimeout(() => router.push("/backend/dashboard"), 1000);
 
             } catch (err: any) {
                 console.error(err);
@@ -49,19 +50,18 @@ function FacebookCallbackContent() {
     }, [searchParams, router]);
 
     return (
-        <div className="flex items-center justify-center min-h-[calc(100vh-140px)] bg-background p-4">
-            <div className="w-full max-w-sm p-8 bg-card border border-border shadow-lg rounded-xl flex flex-col items-center gap-4 text-center">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
-                <h2 className="text-xl font-bold tracking-tight">กำลังเข้าสู่ระบบ</h2>
-                <p className="text-sm text-muted-foreground">{status}</p>
+        <AuthShell title="กำลังเข้าสู่ระบบ" description="เชื่อมต่อบัญชี Facebook ของคุณ">
+            <div className="flex flex-col items-center gap-4 py-4 text-center">
+                <Loader2 className="size-10 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground" aria-live="polite">{status}</p>
             </div>
-        </div>
+        </AuthShell>
     );
 }
 
 export default function FacebookCallback() {
     return (
-        <Suspense fallback={<div className="flex items-center justify-center min-h-[calc(100vh-140px)]">กำลังโหลด...</div>}>
+        <Suspense fallback={<div className="flex min-h-dvh items-center justify-center text-muted-foreground">กำลังโหลด...</div>}>
             <FacebookCallbackContent />
         </Suspense>
     );

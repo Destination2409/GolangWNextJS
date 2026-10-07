@@ -3,8 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { AuthShell, FormError, fieldClass } from "@/components/auth/auth-shell";
+import { saveTokens } from "@/lib/session";
 
 export default function Login() {
     const [email, setEmail] = useState("");
@@ -33,10 +37,8 @@ export default function Login() {
                 throw new Error(data.error || "เข้าสู่ระบบไม่สำเร็จ");
             }
 
-            localStorage.setItem("token", data.token);
-
-            // Update Auth State immediately to reflect in Navbar without full reload
-            window.dispatchEvent(new Event("storage"));
+            // เก็บทั้ง access + refresh token (saveTokens ยิง event ให้ header อัปเดตเองด้วย)
+            saveTokens(data.token, data.refresh_token);
             router.push("/backend/dashboard");
         } catch (err: any) {
             setError(err.message);
@@ -45,81 +47,74 @@ export default function Login() {
         }
     };
 
+    const handleFacebookLogin = () => {
+        const clientId = process.env.NEXT_PUBLIC_FB_CLIENT_TOKEN || process.env.FB_CLIENT_TOKEN || "2040268933586815";
+        const redirectUri = window.location.origin + "/facebook/callback";
+        const fbUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=public_profile,email,user_gender`;
+        window.location.href = fbUrl;
+    };
+
     return (
-        <div className="flex items-center justify-center min-h-[calc(100vh-140px)] bg-background p-4">
-            <div className="w-full max-w-md p-8 space-y-6 bg-card border border-border text-card-foreground shadow-lg rounded-xl">
-                <div className="text-center space-y-2">
-                    <h1 className="text-3xl font-bold tracking-tight">ยินดีต้อนรับกลับเข้าสู่ระบบ</h1>
-                    <p className="text-sm text-muted-foreground">เข้าสู่บัญชีของคุณ</p>
-                </div>
-
-                {error && (
-                    <div className="p-3 text-sm rounded-md bg-destructive/10 text-destructive border border-destructive/20 text-center">
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <div className="space-y-2">
-                        <label htmlFor="email" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">อีเมล</label>
-                        <Input
-                            id="email"
-                            type="email"
-                            placeholder="m@example.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                            isLoading={loading}
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <label htmlFor="password" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">รหัสผ่าน</label>
-                        <Input
-                            id="password"
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
-                            isLoading={loading}
-                        />
-                    </div>
-                    <Button type="submit" className="w-full" isLoading={loading}>
-                        Login
-                    </Button>
-                </form>
-
-                <div className="relative my-4">
-                    <div className="absolute inset-0 flex items-center">
-                        <span className="w-full border-t border-border" />
-                    </div>
-                    <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-card px-2 text-muted-foreground">หรือเข้าสู่ระบบด้วย</span>
-                    </div>
-                </div>
-
-                <Button 
-                    type="button" 
-                    variant="outline" 
-                    className="w-full bg-[#1877F2] text-white hover:bg-[#1877F2]/90 hover:text-white border-0"
-                    onClick={() => {
-                        // ดึงค่า Client ID จาก .env.local ที่ user ระบุ (Fallback ด้วย 2040268933586815 ในกรณีที่ Env ล้มเหลว)
-                        const clientId = process.env.NEXT_PUBLIC_FB_CLIENT_TOKEN || process.env.FB_CLIENT_TOKEN || "2040268933586815";
-                        const redirectUri = window.location.origin + "/facebook/callback";
-                        const fbUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=public_profile,email,user_gender`;
-                        window.location.href = fbUrl;
-                    }}
-                >
-                    <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fillRule="evenodd" d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.878v-6.987h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.988C18.343 21.128 22 16.991 22 12z" clipRule="evenodd"></path></svg>
-                    เข้าสู่ระบบด้วย Facebook
-                </Button>
-
-                <p className="text-center text-sm text-muted-foreground mt-4">
+        <AuthShell
+            title="ยินดีต้อนรับกลับ"
+            description="เข้าสู่ระบบเพื่อจัดการบัญชีและร้านค้าของคุณ"
+            footer={
+                <>
                     ยังไม่มีบัญชีใช่ไหม?{" "}
                     <Link href="/register" className="font-medium text-primary hover:underline underline-offset-4">
-                        Register
+                        สมัครสมาชิก
                     </Link>
-                </p>
+                </>
+            }
+        >
+            <FormError message={error} />
+
+            <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                    <Label htmlFor="email">อีเมล</Label>
+                    <Input
+                        id="email"
+                        type="email"
+                        placeholder="you@email.com"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        disabled={loading}
+                        className={fieldClass}
+                    />
+                </div>
+                <div className="flex flex-col gap-2">
+                    <Label htmlFor="password">รหัสผ่าน</Label>
+                    <Input
+                        id="password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        disabled={loading}
+                        className={fieldClass}
+                    />
+                </div>
+                <Button type="submit" size="lg" className="mt-2 w-full" disabled={loading}>
+                    {loading ? <Loader2 className="animate-spin" /> : <LogIn />}
+                    เข้าสู่ระบบ
+                </Button>
+            </form>
+
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                หรือเข้าสู่ระบบด้วย
+                <span className="h-px flex-1 bg-border" />
             </div>
-        </div>
+
+            <Button type="button" variant="outline" size="lg" className="w-full" onClick={handleFacebookLogin}>
+                <svg viewBox="0 0 24 24" aria-hidden className="size-5 fill-[#1877F2]">
+                    <path d="M24 12.07C24 5.41 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.04V9.41c0-3.02 1.8-4.7 4.54-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.5c-1.5 0-1.96.93-1.96 1.89v2.26h3.32l-.53 3.5h-2.8V24C19.62 23.1 24 18.1 24 12.07" />
+                </svg>
+                Facebook
+            </Button>
+        </AuthShell>
     );
 }

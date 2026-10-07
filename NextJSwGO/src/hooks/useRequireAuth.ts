@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { clearTokens, decodeToken } from '@/lib/session';
 
 export interface UserPayload {
     user_id: number;
@@ -24,16 +25,7 @@ export function useRequireAuth(requiredPermissionId: number = 1) {
         }
 
         try {
-            // Decode Base64Url JWT Payload (segment 2)
-            const base64Url = token.split('.')[1];
-            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            
-            // UTF-8 decode explicitly to perfectly handle Thai text
-            const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
-
-            const decodedPayload: UserPayload = JSON.parse(jsonPayload);
+            const decodedPayload = decodeToken<UserPayload>(token);
 
             const exp = decodedPayload.exp;
             const currentTime = Math.floor(Date.now() / 1000);
@@ -41,7 +33,7 @@ export function useRequireAuth(requiredPermissionId: number = 1) {
 
             // ถ้า Access Token หมดอายุแล้ว และดันไม่มี Refresh Token สำรองไว้เลย = เด้งออกทันที
             if (exp && exp < currentTime && !refreshToken) {
-                localStorage.removeItem("token");
+                clearTokens();
                 router.push("/login");
                 return;
             }
@@ -59,8 +51,7 @@ export function useRequireAuth(requiredPermissionId: number = 1) {
             setIsAuthenticated(true);
         } catch (e) {
             // Token is malformed
-            localStorage.removeItem("token");
-            window.dispatchEvent(new Event("storage"));
+            clearTokens();
             router.push("/login");
         }
     }, [router, requiredPermissionId]);

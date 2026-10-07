@@ -3,9 +3,29 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Loader2, UserPlus } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { FormSelect } from "@/components/form-select";
+import { AuthShell, FormError, fieldClass } from "@/components/auth/auth-shell";
+
+const prefixOptions = [
+    { value: "นาย", label: "นาย" },
+    { value: "นาง", label: "นาง" },
+    { value: "นางสาว", label: "นางสาว" },
+];
+
+const genderOptions = [
+    { value: "male", label: "ชาย" },
+    { value: "female", label: "หญิง" },
+    { value: "other", label: "อื่นๆ" },
+];
+
+// เลือกคำนำหน้าแล้วเดาเพศให้ (และกลับกัน) ถ้าอีกช่องยังว่างอยู่
+const prefixToGender: Record<string, string> = { นาย: "male", นาง: "female", นางสาว: "female" };
+const genderToPrefix: Record<string, string> = { male: "นาย", female: "นางสาว" };
 
 export default function Register() {
     const [email, setEmail] = useState("");
@@ -16,9 +36,7 @@ export default function Register() {
     const [gender, setGender] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
-    const [defaultPrefix, setDefaultPrefix] = useState(["นาย", "นาง", "นางสาว"]);
-    const [defaultGender, setDefaultGender] = useState(["male", "female", "female"]);
-    
+
     const router = useRouter();
 
     const handleRegister = async (e: React.FormEvent) => {
@@ -32,13 +50,13 @@ export default function Register() {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ 
-                    email, 
-                    password, 
-                    prefix, 
-                    first_name: firstName, 
-                    last_name: lastName, 
-                    gender 
+                body: JSON.stringify({
+                    email,
+                    password,
+                    prefix,
+                    first_name: firstName,
+                    last_name: lastName,
+                    gender
                 }),
             });
 
@@ -48,6 +66,7 @@ export default function Register() {
                 throw new Error(data.error || "สมัครสมาชิกไม่สำเร็จ");
             }
 
+            toast.success("สมัครสมาชิกสำเร็จ", { description: "เข้าสู่ระบบด้วยอีเมลที่เพิ่งสมัครได้เลย" });
             router.push("/login");
         } catch (err: any) {
             setError(err.message);
@@ -57,113 +76,115 @@ export default function Register() {
     };
 
     return (
-        <div className="flex items-center justify-center min-h-[calc(100vh-140px)] bg-background p-4 my-8">
-            <div className="w-full max-w-lg p-8 space-y-6 bg-card border border-border text-card-foreground shadow-lg rounded-xl">
-                <div className="text-center space-y-2">
-                    <h1 className="text-3xl font-bold tracking-tight">สร้างบัญชีผู้ใช้</h1>
-                    <p className="text-sm text-muted-foreground">เริ่มต้นใช้งานบัญชีของคุณฟรี</p>
+        <AuthShell
+            title="สร้างบัญชีใหม่"
+            description="สมัครสมาชิกเพื่อเริ่มช้อปของล้ำยุค"
+            footer={
+                <>
+                    มีบัญชีอยู่แล้ว?{" "}
+                    <Link href="/login" className="font-medium text-primary hover:underline underline-offset-4">
+                        เข้าสู่ระบบ
+                    </Link>
+                </>
+            }
+        >
+            <FormError message={error} />
+
+            <form onSubmit={handleRegister} className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="prefix">คำนำหน้าชื่อ</Label>
+                        <FormSelect
+                            id="prefix"
+                            value={prefix}
+                            placeholder="เลือกคำนำหน้า"
+                            options={prefixOptions}
+                            disabled={loading}
+                            onChange={(v) => {
+                                setPrefix(v);
+                                if (!gender && prefixToGender[v]) setGender(prefixToGender[v]);
+                            }}
+                        />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="gender">เพศ</Label>
+                        <FormSelect
+                            id="gender"
+                            value={gender}
+                            placeholder="เลือกเพศ"
+                            options={genderOptions}
+                            disabled={loading}
+                            onChange={(v) => {
+                                setGender(v);
+                                if (!prefix && genderToPrefix[v]) setPrefix(genderToPrefix[v]);
+                            }}
+                        />
+                    </div>
                 </div>
 
-                {error && (
-                    <div className="p-3 text-sm rounded-md bg-destructive/10 text-destructive border border-destructive/20 text-center">
-                        {error}
-                    </div>
-                )}
-
-                <form onSubmit={handleRegister} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <label htmlFor="prefix" className="text-sm font-medium leading-none">คำนำหน้าชื่อ</label>
-                            <Select
-                                id="prefix"
-                                value={prefix}
-                                onChange={(e) => { setPrefix(e.target.value); if (!gender && defaultPrefix.includes(e.target.value)) setGender(defaultGender[defaultPrefix.indexOf(e.target.value)]); }}
-                                isLoading={loading}
-                            >
-                                <option value="" hidden>เลือกคำนำหน้า</option>
-                                <option value="นาย">นาย</option>
-                                <option value="นาง">นาง</option>
-                                <option value="นางสาว">นางสาว</option>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <label htmlFor="gender" className="text-sm font-medium leading-none">เพศ</label>
-                            <Select
-                                id="gender"
-                                value={gender}
-                                onChange={(e) => { setGender(e.target.value); if (!prefix && defaultGender.includes(e.target.value)) setPrefix(defaultPrefix[defaultGender.indexOf(e.target.value)]); }}
-                                isLoading={loading}
-                            >
-                                <option value="" hidden>เลือกเพศ</option>
-                                <option value="male">ชาย</option>
-                                <option value="female">หญิง</option>
-                                <option value="other">อื่นๆ</option>
-                            </Select>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <label htmlFor="first_name" className="text-sm font-medium leading-none">ชื่อจริง *</label>
-                            <Input
-                                id="first_name"
-                                placeholder="สมชาย"
-                                value={firstName}
-                                onChange={(e) => setFirstName(e.target.value)}
-                                required
-                                isLoading={loading}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <label htmlFor="last_name" className="text-sm font-medium leading-none">นามสกุล *</label>
-                            <Input
-                                id="last_name"
-                                placeholder="ทั้งใจ"
-                                value={lastName}
-                                onChange={(e) => setLastName(e.target.value)}
-                                required
-                                isLoading={loading}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="space-y-2 pt-2 border-t border-border mt-4">
-                        <label htmlFor="email" className="text-sm font-medium leading-none">อีเมล *</label>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="firstName">ชื่อจริง</Label>
                         <Input
-                            id="email"
-                            type="email"
-                            placeholder="m@example.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            id="firstName"
+                            autoComplete="given-name"
+                            value={firstName}
+                            onChange={(e) => setFirstName(e.target.value)}
                             required
-                            isLoading={loading}
+                            disabled={loading}
+                            className={fieldClass}
                         />
                     </div>
-                    <div className="space-y-2">
-                        <label htmlFor="password" className="text-sm font-medium leading-none">รหัสผ่าน * (อย่างน้อย 6 ตัวอักษร)</label>
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="lastName">นามสกุล</Label>
                         <Input
-                            id="password"
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            id="lastName"
+                            autoComplete="family-name"
+                            value={lastName}
+                            onChange={(e) => setLastName(e.target.value)}
                             required
-                            minLength={6}
-                            isLoading={loading}
+                            disabled={loading}
+                            className={fieldClass}
                         />
                     </div>
-                    
-                    <Button type="submit" className="w-full mt-6" isLoading={loading}>
-                        Register
-                    </Button>
-                </form>
+                </div>
 
-                <p className="text-center text-sm text-muted-foreground mt-4">
-                    มีบัญชีอยู่แล้วใช่ไหม?{" "}
-                    <Link href="/login" className="font-medium text-primary hover:underline underline-offset-4">
-                        Login
-                    </Link>
-                </p>
-            </div>
-        </div>
+                <div className="flex flex-col gap-2">
+                    <Label htmlFor="email">อีเมล</Label>
+                    <Input
+                        id="email"
+                        type="email"
+                        placeholder="you@email.com"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        disabled={loading}
+                        className={fieldClass}
+                    />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                    <Label htmlFor="password">รหัสผ่าน</Label>
+                    <Input
+                        id="password"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        disabled={loading}
+                        className={fieldClass}
+                    />
+                    <p className="text-xs text-muted-foreground">อย่างน้อย 6 ตัวอักษร</p>
+                </div>
+
+                <Button type="submit" size="lg" className="mt-2 w-full" disabled={loading}>
+                    {loading ? <Loader2 className="animate-spin" /> : <UserPlus />}
+                    สมัครสมาชิก
+                </Button>
+            </form>
+        </AuthShell>
     );
 }
